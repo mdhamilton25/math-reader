@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Synced PDF & Text Highlighter (Full Bundle Stabilization)</title>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  
+  <style>
+    body {
+      font-size: 18px;
+      background-color: white;
+      color: black;
+      margin: 0;
+      font-family: sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top Control Bar Split Layout */
+    #topMenu {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 20px;
+      background-color: rgba(0, 0, 0, 0.1);
+      z-index: 100;
+      height: 40px;
+      transition: transform 0.3s, margin-bottom 0.3s;
+      box-sizing: border-box;
+    }
+
+    #topMenu.hidden-menu {
+      transform: translateY(-60px);
+      margin-bottom: -40px;
+    }
+
+    #menuHoverSensor {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 15px;
+      z-index: 99;
+      pointer-events: auto;
+      display: none;
+    }
+
+    .menu-section {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pdf-controls-group, .text-controls-group, .session-controls-group {
+      background: rgba(0, 0, 0, 0.05);
+      padding: 3px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .session-controls-group {
+      background: rgba(0, 100, 255, 0.08);
+      border-color: rgba(0, 100, 255, 0.2);
+    }
+
+    #pdfPageIndicator, #textPageIndicator {
+      font-size: 14px;
+      font-weight: bold;
+      text-align: center;
+      white-space: nowrap;
+    }
+    #pdfPageIndicator { min-width: 80px; }
+    #textPageIndicator { min-width: 75px; }
+
+    button, select {
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 15px;
+      border: 1px solid #ccc;
+      background-color: #fff;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      height: 32px;
+      white-space: nowrap;
+    }
+
+    button:hover:not(:disabled) {
+      background-color: #f0f0f0;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .color-picker-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 14px;
+    }
+    input[type="color"] {
+      padding: 0;
+      width: 28px;
+      height: 28px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      cursor: pointer;
+      background: none;
+    }
+
+    /* Main Split Workspace */
+    #workspace {
+      display: flex;
+      flex: 1;
+      height: 100%;
+      width: 100vw;
+    }
+
+    .panel {
+      flex: 1;
+      width: 50vw;
+      height: 100%;
+      overflow-y: auto;
+      box-sizing: border-box;
+      position: relative;
+    }
+
+    #leftPanel {
+      border-right: 2px solid #ccc;
+      background-color: #f5f5f5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #rightPanel {
+      background-color: #fff;
+      color: #000;
+      padding: 30px;
+      transition: background-color 0.2s, color 0.2s;
+    }
+
+    /* PDF Container Setup */
+    #pdfViewerWrapper {
+      padding: 20px 0;
+    }
+
+    #pdfViewer {
+      position: relative;
+      border: 1px solid #ccc;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+      background-color: white;
+    }
+
+    canvas {
+      display: block;
+      max-width: 100%;
+    }
+
+    #textOverlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .word-span {
+      position: absolute;
+      color: transparent;
+      white-space: pre;
+      transform-origin: left bottom;
+    }
+
+    #textContainer {
+      line-height: 1.6;
+    }
+
+    .highlight {
+      background-color: var(--highlight-color, #ffff00);
+      border-radius: 2px;
+      color: black !important;
+    }
+
+    #rightPanel.inverted {
+      background-color: #1a1a1a !important;
+      color: #ffffff !important;
+    }
+
+    dialog {
+      padding: 20px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+    }
+    dialog textarea {
+      width: 400px;
+      height: 200px;
+      display: block;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="menuHoverSensor"></div>
+
+  <div id="topMenu">
+    <div class="menu-section">
+      <div class="session-controls-group">
+        <button id="btnSaveSession" title="Save Bundle">💾 Save Book</button>
+        <button id="btnLoadSession" title="Load Bundle">📂 Load Book</button>
+        <input type="file" id="sessionFileInput" accept=".json" style="display:none;" />
+      </div>
+
+      <div class="pdf-controls-group">
+        <button id="pdfOverrideBack" title="Manual PDF Page Back">&lt;</button>
+        <span id="pdfPageIndicator">0/0</span>
+        <button id="pdfOverrideForward" title="Manual PDF Page Forward">&gt;</button>
+        
+        <button id="btnFitWidth" title="Fit to Column Width">⇄ Fit</button>
+        <button id="btnFitHeight" title="Fit to Screen Height">↕ Fit</button>
+        <select id="zoomSelector" title="Manual Zoom Level">
+          <option value="0.5">50%</option>
+          <option value="0.75">75%</option>
+          <option value="1.0">100%</option>
+          <option value="1.2" selected>120%</option>
+          <option value="1.5">150%</option>
+          <option value="1.8">180%</option>
+          <option value="2.0">200%</option>
+        </select>
+
+        <input type="file" id="fileInput" accept=".pdf" style="display:none;" />
+        <button id="uploadButton" title="Upload PDF">⬆ PDF</button>
+      </div>
+    </div>
+    
+    <div class="menu-section">
+      <div class="text-controls-group">
+        <button id="textPageBack" title="Text Page Back">←</button>
+        <span id="textPageIndicator">Txt: 1/1</span>
+        <button id="textPageForward" title="Text Page Forward">→</button>
+      </div>
+
+      <div class="color-picker-wrapper">
+        <input type="color" id="highlightColorPicker" value="#ffff00" title="Choose Highlight Color">
+      </div>
+
+      <button id="openDialogButton" title="Paste Text">Paste</button>
+      <button id="increaseFontSize">+</button>
+      <button id="decreaseFontSize">-</button>
+      <button id="invertButton" title="Toggle Dark Text Mode">◪</button>
+      <button id="hideMenuButton">Hide</button>
+    </div>
+  </div>
+
+  <div id="workspace">
+    <div id="leftPanel" class="panel">
+      <div id="pdfViewerWrapper">
+        <div id="pdfViewer">
+          <canvas id="pdfCanvas"></canvas>
+          <div id="textOverlay"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="rightPanel" class="panel">
+      <div id="textContainer">
+        <p id="textContentParagraph"></p>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="textDialog">
+    <h3>Paste Book String Engine Content</h3>
+    <p style="font-size: 14px; color: #666; margin-top:-10px;">Use three line breaks (\n\n\n) to isolate chapters/pages chunks.</p>
+    <textarea id="textInput" placeholder="Paste text data stream here..."></textarea>
+    <div style="text-align: right; gap: 10px; display: flex; justify-content: flex-end;">
+      <button id="cancelButton">Cancel</button>
+      <button id="confirmButton">Confirm</button>
+    </div>
+  </dialog>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+const defaultText = "Welcome! Steps to start reading:\n\n1. Click \"PDF\" to load your visual book layout on the left side.\n2. Click \"Paste\" to insert matching text on this right side.\n3. Separate pages/slides on this text engine panel by striking 3 line breaks (Enter 3 times) in your text block.\n4. Navigate words with Arrow Keys or side taps. The PDF page changes dynamically when text cycles pages, use the floating < and > items above the PDF to resolve alignment drifts manually.";
+
+// Application State Engine Variables
+let pdfRawBytes = null; 
+let pdfDoc = null;
+let pdfCurrentPageNum = parseInt(localStorage.getItem('pdfCurrentPageNum')) || 1;
+let pdfCurrentScale = parseFloat(localStorage.getItem('pdfCurrentScale')) || 1.2;
+let pdfScaleMode = localStorage.getItem('pdfScaleMode') || 'manual'; 
+
+let textPages = JSON.parse(localStorage.getItem('textPages')) || [defaultText];
+let textCurrentPageIndex = parseInt(localStorage.getItem('textCurrentPageIndex')) || 0;
+let textCurrentWordIndex = parseInt(localStorage.getItem('textCurrentWordIndex')) || 0;
+
+let fontSize = parseInt(localStorage.getItem('fontSize')) || 18;
+let isColorsInverted = localStorage.getItem('isColorsInverted') === 'true';
+let isMenuHidden = localStorage.getItem('isMenuHidden') === 'true';
+let savedHighlightColor = localStorage.getItem('highlightColor') || '#ffff00';
+
+let pdfPageCache = {}; 
+
+// Component Bindings
+const fileInput = document.getElementById('fileInput');
+const uploadButton = document.getElementById('uploadButton');
+const openDialogButton = document.getElementById('openDialogButton');
+const textDialog = document.getElementById('textDialog');
+const textInput = document.getElementById('textInput');
+const confirmButton = document.getElementById('confirmButton');
+const cancelButton = document.getElementById('cancelButton');
+const increaseFontSizeButton = document.getElementById('increaseFontSize');
+const decreaseFontSizeButton = document.getElementById('decreaseFontSize');
+const invertButton = document.getElementById('invertButton');
+const hideMenuButton = document.getElementById('hideMenuButton');
+const topMenu = document.getElementById('topMenu');
+const colorPicker = document.getElementById('highlightColorPicker');
+const hoverSensor = document.getElementById('menuHoverSensor');
+
+const btnSaveSession = document.getElementById('btnSaveSession');
+const btnLoadSession = document.getElementById('btnLoadSession');
+const sessionFileInput = document.getElementById('sessionFileInput');
+
+const leftPanel = document.getElementById('leftPanel');
+const pdfCanvas = document.getElementById('pdfCanvas');
+const pdfCtx = pdfCanvas.getContext('2d');
+const textOverlay = document.getElementById('textOverlay');
+const pdfPageIndicator = document.getElementById('pdfPageIndicator');
+const pdfOverrideBack = document.getElementById('pdfOverrideBack');
+const pdfOverrideForward = document.getElementById('pdfOverrideForward');
+
+const btnFitWidth = document.getElementById('btnFitWidth');
+const btnFitHeight = document.getElementById('btnFitHeight');
+const zoomSelector = document.getElementById('zoomSelector');
+
+const rightPanel = document.getElementById('rightPanel');
+const textParagraph = document.getElementById('textContentParagraph');
+const textPageBack = document.getElementById('textPageBack');
+const textPageForward = document.getElementById('textPageForward');
+const textPageIndicator = document.getElementById('textPageIndicator');
+
+void function initSavedPreferences() {
+  textParagraph.style.fontSize = `${fontSize}px`;
+  rightPanel.classList.toggle('inverted', isColorsInverted);
+  colorPicker.value = savedHighlightColor;
+  document.documentElement.style.setProperty('--highlight-color', savedHighlightColor);
+  
+  if (pdfScaleMode === 'manual') {
+    zoomSelector.value = pdfCurrentScale.toString();
+  }
+  
+  applyMenuVisibilityState();
+  updateTextPageControlsUI();
+}();
+
+function saveState() {
+  localStorage.setItem('textCurrentPageIndex', textCurrentPageIndex);
+  localStorage.setItem('textCurrentWordIndex', textCurrentWordIndex);
+  localStorage.setItem('pdfCurrentPageNum', pdfCurrentPageNum);
+  localStorage.setItem('pdfCurrentScale', pdfCurrentScale);
+  localStorage.setItem('pdfScaleMode', pdfScaleMode);
+}
+
+/* ==========================================================================
+   CONFIG PACKAGER MODULE (HIGH CAPACITY FIXED BASE64 CHUNKER)
+   ========================================================================== */
+function uint8ArrayToBase64(uint8Array) {
+  let binaryString = "";
+  const len = uint8Array.byteLength;
+  const chunk_size = 0x8000; 
+  
+  for (let i = 0; i < len; i += chunk_size) {
+    const chunk = uint8Array.subarray(i, Math.min(i + chunk_size, len));
+    binaryString += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binaryString);
+}
+
+btnSaveSession.addEventListener('click', () => {
+  // FIXED: Check existence and size using byteLength property safe validations
+  if (!pdfRawBytes || !pdfRawBytes.byteLength || pdfRawBytes.byteLength === 0) {
+    alert("Please upload a PDF file first.");
+    return;
+  }
+
+  const base64Pdf = uint8ArrayToBase64(pdfRawBytes);
+  
+  const payloadBundle = {
+    appSignature: "SyncedPdfHighlighterBundle",
+    pdfBase64: base64Pdf,
+    textPages: textPages,
+    savedPageNum: pdfCurrentPageNum,
+    savedPageIndex: textCurrentPageIndex,
+    savedWordIndex: textCurrentWordIndex,
+    scaleMode: pdfScaleMode,
+    scaleValue: pdfCurrentScale
+  };
+
+  const dataBlob = new Blob([JSON.stringify(payloadBundle)], { type: "application/json" });
+  const downloadLink = document.createElement('a');
+  downloadLink.href = URL.createObjectURL(dataBlob);
+  downloadLink.download = `BookBundle-${new Date().toISOString().slice(0,10)}.json`;
+  downloadLink.click();
+});
+
+btnLoadSession.addEventListener('click', () => sessionFileInput.click());
+
+sessionFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async function() {
+    try {
+      const importedData = JSON.parse(this.result);
+      if (importedData.appSignature !== "SyncedPdfHighlighterBundle") {
+        throw new Error("Invalid file format.");
+      }
+
+      textPages = importedData.textPages;
+      textCurrentPageIndex = importedData.savedPageIndex || 0;
+      textCurrentWordIndex = importedData.savedWordIndex || 0;
+      localStorage.setItem('textPages', JSON.stringify(textPages));
+
+      const binaryString = atob(importedData.pdfBase64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      pdfRawBytes = bytes;
+
+      if(!pdfRawBytes || !pdfRawBytes.byteLength || pdfRawBytes.byteLength === 0) {
+        throw new Error("The unpacked PDF data size is zero bytes.");
+      }
+
+      const loadingTask = pdfjsLib.getDocument({ data: pdfRawBytes, stopAtErrors: false });
+      pdfDoc = await loadingTask.promise;
+      
+      pdfCurrentPageNum = importedData.savedPageNum || 1;
+      pdfScaleMode = importedData.scaleMode || 'manual';
+      pdfCurrentScale = importedData.scaleValue || 1.2;
+      
+      pdfPageCache = {}; 
+      renderPdfPage(pdfCurrentPageNum);
+      syncShowTextPage(textCurrentPageIndex, "START");
+      textCurrentWordIndex = importedData.savedWordIndex || 0; 
+      highlightCurrentTextWord();
+      
+      alert("Book loaded successfully!");
+    } catch (err) {
+      alert("Failed to read bundle file: " + err.message);
+    }
+  };
+  reader.readAsText(file);
+});
+
+/* ==========================================================================
+   HOVER REVEAL & UI CONTROLLERS
+   ========================================================================== */
+function applyMenuVisibilityState() {
+  if (isMenuHidden) {
+    topMenu.classList.add('hidden-menu');
+    hideMenuButton.innerText = "Show";
+    hoverSensor.style.display = 'block';
+  } else {
+    topMenu.classList.remove('hidden-menu');
+    hideMenuButton.innerText = "Hide";
+    hoverSensor.style.display = 'none';
+  }
+}
+
+hoverSensor.addEventListener('mouseenter', () => {
+  if (isMenuHidden) {
+    isMenuHidden = false;
+    applyMenuVisibilityState();
+    localStorage.setItem('isMenuHidden', isMenuHidden);
+  }
+});
+
+topMenu.addEventListener('mouseleave', () => {
+  setTimeout(() => {
+    if (document.activeElement === textInput) return;
+    isMenuHidden = true;
+    applyMenuVisibilityState();
+    localStorage.setItem('isMenuHidden', isMenuHidden);
+  }, 150);
+});
+
+colorPicker.addEventListener('input', (e) => {
+  const selectedColor = e.target.value;
+  document.documentElement.style.setProperty('--highlight-color', selectedColor);
+  localStorage.setItem('highlightColor', selectedColor);
+});
+
+/* ==========================================================================
+   VIEWPORT ZOOM/SCALE EVENT ENGINE
+   ========================================================================== */
+async function recalculateViewportScale(page) {
+  const baseViewport = page.getViewport({ scale: 1.0 });
+  if (pdfScaleMode === 'width') {
+    const availableWidth = leftPanel.clientWidth - 40;
+    pdfCurrentScale = availableWidth / baseViewport.width;
+  } else if (pdfScaleMode === 'height') {
+    const availableHeight = leftPanel.clientHeight - 40;
+    pdfCurrentScale = availableHeight / baseViewport.height;
+  }
+  return page.getViewport({ scale: pdfCurrentScale });
+}
+
+zoomSelector.addEventListener('change', (e) => {
+  pdfScaleMode = 'manual';
+  pdfCurrentScale = parseFloat(e.target.value);
+  pdfPageCache = {}; 
+  renderPdfPage(pdfCurrentPageNum);
+});
+
+btnFitWidth.addEventListener('click', () => {
+  pdfScaleMode = 'width';
+  pdfPageCache = {}; 
+  renderPdfPage(pdfCurrentPageNum);
+});
+
+btnFitHeight.addEventListener('click', () => {
+  pdfScaleMode = 'height';
+  pdfPageCache = {};
+  renderPdfPage(pdfCurrentPageNum);
+});
+
+window.addEventListener('resize', () => {
+  if (pdfDoc && (pdfScaleMode === 'width' || pdfScaleMode === 'height')) {
+    pdfPageCache = {};
+    renderPdfPage(pdfCurrentPageNum);
+  }
+});
+
+/* ==========================================================================
+   PDF PROCESSING LAYOUT MODULE & ASYNC PRELOAD PIPELINE
+   ========================================================================== */
+uploadButton.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const fileReader = new FileReader();
+  fileReader.onload = async function() {
+    pdfRawBytes = new Uint8Array(this.result);
+    try {
+      const loadingTask = pdfjsLib.getDocument({ data: pdfRawBytes, stopAtErrors: false });
+      pdfDoc = await loadingTask.promise;
+      pdfPageCache = {}; 
+      if (pdfCurrentPageNum > pdfDoc.numPages) pdfCurrentPageNum = 1;
+      renderPdfPage(pdfCurrentPageNum);
+    } catch (err) {
+      alert("Error parsing PDF file: " + err.message);
+    }
+  };
+  fileReader.readAsArrayBuffer(file);
+});
+
+async function processPageDataIntoCache(pageNo) {
+  if (!pdfDoc || pdfPageCache[pageNo]) return;
+
+  try {
+    const page = await pdfDoc.getPage(pageNo);
+    const viewport = (pdfScaleMode === 'manual') 
+      ? page.getViewport({ scale: pdfCurrentScale }) 
+      : await recalculateViewportScale(page);
+    
+    const offscreenCanvas = document.createElement('canvas');
+    const offscreenCtx = offscreenCanvas.getContext('2d');
+    offscreenCanvas.width = viewport.width;
+    offscreenCanvas.height = viewport.height;
+
+    await page.render({ canvasContext: offscreenCtx, viewport: viewport }).promise;
+    const textContent = await page.getTextContent();
+
+    pdfPageCache[pageNo] = {
+      canvas: offscreenCanvas,
+      textContent: textContent,
+      width: viewport.width,
+      height: viewport.height,
+      scale: viewport.scale
+    };
+  } catch (e) {
+    console.warn(`Preload Engine Skipping page ${pageNo}:`, e);
+  }
+}
+
+async function triggerLookaheadPreloadQueue(currentPage) {
+  if (!pdfDoc) return;
+  const targetForward = currentPage + 1;
+  const targetBackward = currentPage - 1;
+
+  if (targetForward <= pdfDoc.numPages) processPageDataIntoCache(targetForward);
+  if (targetBackward >= 1) processPageDataIntoCache(targetBackward);
+}
+
+async function renderPdfPage(pageNo) {
+  if (!pdfDoc) return;
+  
+  textOverlay.innerHTML = '';
+  pdfPageIndicator.innerText = `${pageNo}/${pdfDoc.numPages}`;
+
+  if (pdfPageCache[pageNo]) {
+    const cachedData = pdfPageCache[pageNo];
+    
+    pdfCanvas.width = cachedData.width;
+    pdfCanvas.height = cachedData.height;
+    document.getElementById('pdfViewer').style.width = `${cachedData.width}px`;
+    document.getElementById('pdfViewer').style.height = `${cachedData.height}px`;
+
+    pdfCtx.drawImage(cachedData.canvas, 0, 0);
+    injectTextOverlayDOM(cachedData.textContent, cachedData.height, cachedData.scale);
+    
+    triggerLookaheadPreloadQueue(pageNo);
+    saveState();
+    return;
+  }
+
+  try {
+    const page = await pdfDoc.getPage(pageNo);
+    const viewport = (pdfScaleMode === 'manual') 
+      ? page.getViewport({ scale: pdfCurrentScale }) 
+      : await recalculateViewportScale(page);
+    
+    pdfCanvas.width = viewport.width;
+    pdfCanvas.height = viewport.height;
+    document.getElementById('pdfViewer').style.width = `${viewport.width}px`;
+    document.getElementById('pdfViewer').style.height = `${viewport.height}px`;
+
+    await page.render({ canvasContext: pdfCtx, viewport: viewport }).promise;
+    const textContent = await page.getTextContent();
+    
+    injectTextOverlayDOM(textContent, viewport.height, viewport.scale);
+    
+    pdfPageCache[pageNo] = {
+      canvas: document.createElement('canvas'),
+      textContent: textContent,
+      width: viewport.width,
+      height: viewport.height,
+      scale: viewport.scale
+    };
+    pdfPageCache[pageNo].canvas.width = viewport.width;
+    pdfPageCache[pageNo].canvas.height = viewport.height;
+    pdfPageCache[pageNo].canvas.getContext('2d').drawImage(pdfCanvas, 0, 0);
+
+    triggerLookaheadPreloadQueue(pageNo);
+    saveState();
+  } catch (error) {
+    console.error("PDF Render Pipeline Failure:", error);
+  }
+}
+
+function injectTextOverlayDOM(textContent, viewportHeight, scale) {
+  textOverlay.innerHTML = '';
+  textContent.items.forEach(item => {
+    if (!item.str.trim()) return;
+
+    const words = item.str.split(/(\s+)/);
+    let accumulatedText = "";
+    const tx = pdfjsLib.Util.transform([scale, 0, 0, scale, 0, 0], item.transform);
+    
+    words.forEach(word => {
+      if (!word.trim()) {
+        accumulatedText += word;
+        return;
+      }
+
+      const span = document.createElement('span');
+      span.className = 'word-span';
+      span.innerText = word;
+
+      const fontHeight = Math.sqrt(item.transform[2] * item.transform[2] + item.transform[3] * item.transform[3]);
+      span.style.fontFamily = item.fontName;
+      span.style.fontSize = `${fontHeight * scale}px`;
+      span.style.left = `${tx[4]}px`; 
+      span.style.top = `${viewportHeight - tx[5] - (fontHeight * scale)}px`;
+
+      if (accumulatedText) {
+         const roughOffset = accumulatedText.length * (fontHeight * 0.35) * scale;
+         span.style.left = `${tx[4] + roughOffset}px`;
+      }
+
+      textOverlay.appendChild(span);
+      accumulatedText += word;
+    });
+  });
+}
+
+pdfOverrideBack.addEventListener('click', () => {
+  if (pdfDoc && pdfCurrentPageNum > 1) {
+    pdfCurrentPageNum--;
+    renderPdfPage(pdfCurrentPageNum);
+  }
+});
+
+pdfOverrideForward.addEventListener('click', () => {
+  if (pdfDoc && pdfCurrentPageNum < pdfDoc.numPages) {
+    pdfCurrentPageNum++;
+    renderPdfPage(pdfCurrentPageNum);
+  }
+});
+
+/* ==========================================================================
+   TEXT HIGHLIGHTER NAVIGATION ENGINE
+   ========================================================================= */
+function highlightCurrentTextWord() {
+  const currentRawString = textPages[textCurrentPageIndex] || "";
+  const wordsArray = currentRawString.split(/(\s+)/);
+  let logicalWordCount = 0;
+  
+  const configuredNodes = wordsArray.map((chunk) => {
+    if (chunk.trim().length > 0) {
+      const matchingIndex = logicalWordCount;
+      logicalWordCount++;
+      if (matchingIndex === textCurrentWordIndex) {
+        return `<span class="highlight">${chunk}</span>`;
+      }
+      return chunk;
+    } else {
+      return chunk; 
+    }
+  });
+
+  textParagraph.innerHTML = configuredNodes.join('');
+  
+  const targetHighlight = textParagraph.querySelector('.highlight');
+  if (targetHighlight) {
+    targetHighlight.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+function getActivePageWordCount() {
+  const activeString = textPages[textCurrentPageIndex] || "";
+  const analyticalMatches = activeString.match(/\S+/g);
+  return analyticalMatches ? analyticalMatches.length : 0;
+}
+
+function updateTextPageControlsUI() {
+  textPageIndicator.innerText = `Txt: ${textCurrentPageIndex + 1}/${textPages.length}`;
+  textPageBack.disabled = textCurrentPageIndex === 0;
+  textPageForward.disabled = textCurrentPageIndex === textPages.length - 1;
+}
+
+function syncShowTextPage(index, targetDirection = "START") {
+  if (index >= 0 && index < textPages.length) {
+    textCurrentPageIndex = index;
+    
+    if (targetDirection === "START") {
+      textCurrentWordIndex = 0;
+    } else {
+      const totalWords = getActivePageWordCount();
+      textCurrentWordIndex = Math.max(0, totalWords - 1);
+    }
+    
+    highlightCurrentTextWord();
+    updateTextPageControlsUI();
+
+    const predictedPdfPage = textCurrentPageIndex + 1;
+    if (pdfDoc && predictedPdfPage <= pdfDoc.numPages) {
+      pdfCurrentPageNum = predictedPdfPage;
+      renderPdfPage(pdfCurrentPageNum);
+    }
+    saveState();
+  }
+}
+
+textPageBack.addEventListener('click', () => {
+  if (textCurrentPageIndex > 0) {
+    syncShowTextPage(textCurrentPageIndex - 1, "START");
+  }
+});
+
+textPageForward.addEventListener('click', () => {
+  if (textCurrentPageIndex < textPages.length - 1) {
+    syncShowTextPage(textCurrentPageIndex + 1, "START");
+  }
+});
+
+openDialogButton.addEventListener('click', () => {
+  textInput.value = textPages.join('\n\n\n');
+  textDialog.showModal();
+});
+
+confirmButton.addEventListener('click', () => {
+  const sourcePayload = textInput.value;
+  if (sourcePayload.trim().length > 0) {
+    textPages = sourcePayload.split('\n\n\n');
+    localStorage.setItem('textPages', JSON.stringify(textPages));
+    textCurrentPageIndex = 0;
+    textCurrentWordIndex = 0;
+    syncShowTextPage(0, "START");
+  }
+  textDialog.close();
+});
+
+cancelButton.addEventListener('click', () => textDialog.close());
+
+increaseFontSizeButton.addEventListener('click', () => {
+  fontSize += 2;
+  textParagraph.style.fontSize = `${fontSize}px`;
+  localStorage.setItem('fontSize', fontSize);
+});
+
+decreaseFontSizeButton.addEventListener('click', () => {
+  fontSize = Math.max(fontSize - 2, 12);
+  textParagraph.style.fontSize = `${fontSize}px`;
+  localStorage.setItem('fontSize', fontSize);
+});
+
+/* ==========================================================================
+   GLOBAL RUNTIME CONTROLS
+   ========================================================================== */
+invertButton.addEventListener('click', () => {
+  isColorsInverted = !isColorsInverted;
+  rightPanel.classList.toggle('inverted', isColorsInverted);
+  localStorage.setItem('isColorsInverted', isColorsInverted);
+});
+
+hideMenuButton.addEventListener('click', () => {
+  isMenuHidden = !isMenuHidden;
+  localStorage.setItem('isMenuHidden', isMenuHidden);
+  applyMenuVisibilityState();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (document.activeElement === textInput) return;
+
+  const currentMaxWords = getActivePageWordCount();
+
+  if (event.key === 'ArrowRight') {
+    if (textCurrentWordIndex < currentMaxWords - 1) {
+      textCurrentWordIndex++;
+      highlightCurrentTextWord();
+      saveState();
+    } else if (textCurrentPageIndex < textPages.length - 1) {
+      syncShowTextPage(textCurrentPageIndex + 1, "START");
+    }
+  } else if (event.key === 'ArrowLeft') {
+    if (textCurrentWordIndex > 0) {
+      textCurrentWordIndex--;
+      highlightCurrentTextWord();
+      saveState();
+    } else if (textCurrentPageIndex > 0) {
+      syncShowTextPage(textCurrentPageIndex - 1, "END");
+    }
+  }
+});
+
+document.addEventListener('touchend', (event) => {
+  const screenHeight = window.innerHeight;
+  const screenWidth = window.innerWidth;
+  const tapX = event.changedTouches[0].clientX;
+  const tapY = event.changedTouches[0].clientY;
+  
+  if (isMenuHidden && tapY < screenHeight * 0.1) {
+    isMenuHidden = false;
+    applyMenuVisibilityState();
+    localStorage.setItem('isMenuHidden', isMenuHidden);
+    return;
+  }
+
+  if (tapY < 60) return; 
+
+  const currentMaxWords = getActivePageWordCount();
+
+  if (tapX < screenWidth / 2) { 
+    if (textCurrentWordIndex > 0) {
+      textCurrentWordIndex--;
+      highlightCurrentTextWord();
+      saveState();
+    } else if (textCurrentPageIndex > 0) {
+      syncShowTextPage(textCurrentPageIndex - 1, "END");
+    }
+  } else { 
+    if (textCurrentWordIndex < currentMaxWords - 1) {
+      textCurrentWordIndex++;
+      highlightCurrentTextWord();
+      saveState();
+    } else if (textCurrentPageIndex < textPages.length - 1) {
+      syncShowTextPage(textCurrentPageIndex + 1, "START");
+    }
+  }
+});
+
+highlightCurrentTextWord();
+  </script>
+</body>
+</html>
